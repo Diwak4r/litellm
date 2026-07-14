@@ -1104,6 +1104,82 @@ def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
     assert cost > 0
 
 
+def test_region_name_applied_with_custom_pricing():
+    """region_name from _hidden_params must NOT be embedded when router_model_id
+    already gives the exact cost-calc key. The router-model-id path returns the
+    registered key as-is, avoiding a broken "provider/us-east-1/key" lookup.
+    """
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from types import SimpleNamespace
+
+    custom_model_id = "claude-sonnet-4-region-test"
+    custom_pricing_info = {
+        "input_cost_per_token": 0.0003,
+        "output_cost_per_token": 0.0015,
+        "max_tokens": 8192,
+        "litellm_provider": "anthropic",
+    }
+    litellm.register_model(model_cost={custom_model_id: custom_pricing_info})
+
+    completion_response = SimpleNamespace(
+        _hidden_params={"region_name": "us-east-1"}
+    )
+
+    selected = _select_model_name_for_cost_calc(
+        model="anthropic/claude-sonnet-4-20250514",
+        completion_response=completion_response,
+        custom_pricing=True,
+        custom_llm_provider="anthropic",
+        router_model_id=custom_model_id,
+    )
+    # router_model_id is already the exact key; region must NOT be added
+    assert selected == custom_model_id
+
+
+def test_region_name_embedded_when_router_id_not_used():
+    """region_name from _hidden_params MUST be embedded when router_model_id
+    is not provided, even with custom_pricing=True. This covers the path where
+    the raw model name gets the provider+region prefix for cost lookup.
+    """
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from types import SimpleNamespace
+
+    completion_response = SimpleNamespace(
+        _hidden_params={"region_name": "us-east-1"}
+    )
+
+    selected = _select_model_name_for_cost_calc(
+        model="anthropic.claude-v2",
+        completion_response=completion_response,
+        custom_pricing=True,
+        custom_llm_provider="bedrock",
+        router_model_id=None,
+    )
+    assert selected == "bedrock/us-east-1/anthropic.claude-v2"
+
+
+
+def test_region_name_applied_with_base_model():
+    """region_name from _hidden_params must be embedded in the cost-calc key
+    when base_model (e.g. azure) selects the return model.
+    """
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from types import SimpleNamespace
+
+    completion_response = SimpleNamespace(
+        _hidden_params={"region_name": "us-east-1"}
+    )
+
+    selected = _select_model_name_for_cost_calc(
+        model="azure/my-deployment",
+        completion_response=completion_response,
+        custom_pricing=False,
+        custom_llm_provider="azure",
+        base_model="gpt-4",
+    )
+    assert selected == "azure/us-east-1/gpt-4"
+
+
 def test_azure_realtime_cost_calculator():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")

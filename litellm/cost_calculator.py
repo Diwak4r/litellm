@@ -747,6 +747,7 @@ def _select_model_name_for_cost_calc(
 
     return_model: Optional[str] = None
     region_name: Optional[str] = None
+    _return_model_is_router_id: bool = False
     custom_llm_provider = _get_provider_for_cost_calc(model=model, custom_llm_provider=custom_llm_provider)
 
     completion_response_model: Optional[str] = None
@@ -766,6 +767,7 @@ def _select_model_name_for_cost_calc(
                 or entry.get("tiered_pricing") is not None
             ):
                 return_model = router_model_id
+                _return_model_is_router_id = True
             else:
                 return_model = model
         else:
@@ -777,7 +779,8 @@ def _select_model_name_for_cost_calc(
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
             return_model = hidden_params.get("model", model)
-    elif hidden_params is not None and hidden_params.get("region_name", None) is not None:
+
+    if hidden_params is not None and hidden_params.get("region_name", None) is not None:
         region_name = hidden_params.get("region_name", None)
 
     if return_model is None and completion_response_model is not None:
@@ -790,6 +793,7 @@ def _select_model_name_for_cost_calc(
         return_model is not None
         and custom_llm_provider is not None
         and not _model_contains_known_llm_provider(return_model)
+        and not _return_model_is_router_id
     ):  # add provider prefix if not already present, to match model_cost
         if region_name is not None:
             return_model = f"{custom_llm_provider}/{region_name}/{return_model}"
