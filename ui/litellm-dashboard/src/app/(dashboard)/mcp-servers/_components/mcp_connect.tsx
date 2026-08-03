@@ -5,6 +5,7 @@ import { Card, Typography, Space, Alert, Button, Switch, Form, Collapse } from "
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, Title as TremorTitle, Text as TremorText } from "@tremor/react";
 import { CopyIcon, Code, Terminal, Globe, CheckIcon, ExternalLinkIcon, KeyIcon, ServerIcon, Zap } from "lucide-react";
 import { getProxyBaseUrl } from "@/components/networking";
+import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 
 const { Title, Text } = Typography;
@@ -112,10 +113,12 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
 
 interface MCPConnectProps {
   currentServerAccessGroups?: string[];
+  accessToken?: string | null;
 }
 
-const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
-  const proxyBaseUrl = getProxyBaseUrl();
+const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [], accessToken = null }) => {
+  const proxySettings = useProxySettings(accessToken);
+  const proxyBaseUrl = proxySettings?.LITELLM_UI_API_DOC_BASE_URL?.trim() || getProxyBaseUrl();
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [serverHeaders, setServerHeaders] = useState<Record<string, string[]>>({
     openai: [],
