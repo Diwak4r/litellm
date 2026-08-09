@@ -78,6 +78,120 @@ def test_validate_environment_azure_key_within_headers():
     assert result == expected
 
 
+# ---------------------------------------------------------------------------
+# Regression tests for https://github.com/BerriAI/litellm/issues/36366
+# Azure rejects namespace tools with an empty/whitespace-only `description`
+# (code=empty_string, "Expected a string with minimum length 1"). Codex CLI
+# 0.147.0 ships a default `functions` namespace with `"description": ""`,
+# which fails every Azure Responses call before inference. The Azure transform
+# must normalize such descriptions to the namespace's own name while leaving
+# every supplied non-empty description untouched.
+# ---------------------------------------------------------------------------
+
+
+def _azure_responses_namespace_tool(description):
+    tool = {
+        "type": "namespace",
+        "name": "functions",
+        "tools": [
+            {
+                "type": "function",
+                "name": "ping",
+                "description": "Return pong.",
+                "parameters": {"type": "object"},
+            }
+        ],
+    }
+    if description is not None:
+        tool["description"] = description
+    return tool
+
+
+def _azure_responses_transform(input):
+    config = AzureOpenAIResponsesAPIConfig()
+    return config.transform_responses_api_request(
+        model="azure-responses-model",
+        input=input,
+        response_api_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+
+@pytest.mark.serial
+def test_azure_responses_namespace_empty_description_normalized():
+    """description='' must be replaced by the namespace's own name."""
+    additional_tools_item = {
+        "type": "additional_tools",
+        "role": "developer",
+        "tools": [_azure_responses_namespace_tool("")],
+    }
+    result = _azure_responses_transform([additional_tools_item])
+    tools = result["input"][0]["tools"]
+    assert tools[0]["description"] == "functions"
+
+
+@pytest.mark.serial
+def test_azure_responses_namespace_whitespace_description_normalized():
+    """A whitespace-only description must also be replaced."""
+    additional_tools_item = {
+        "type": "additional_tools",
+        "role": "developer",
+        "tools": [_azure_responses_namespace_tool("   ")],
+    }
+    result = _azure_responses_transform([additional_tools_item])
+    tools = result["input"][0]["tools"]
+    assert tools[0]["description"] == "functions"
+
+
+@pytest.mark.serial
+def test_azure_responses_namespace_missing_description_normalized():
+    """A namespace with no description key at all gets the same fallback."""
+    additional_tools_item = {
+        "type": "additional_tools",
+        "role": "developer",
+        "tools": [_azure_responses_namespace_tool(None)],
+    }
+    result = _azure_responses_transform([additional_tools_item])
+    tools = result["input"][0]["tools"]
+    assert tools[0]["description"] == "functions"
+
+
+@pytest.mark.serial
+def test_azure_responses_namespace_populated_description_unchanged():
+    """Supplied non-empty descriptions must never be rewritten."""
+    additional_tools_item = {
+        "type": "additional_tools",
+        "role": "developer",
+        "tools": [_azure_responses_namespace_tool("Codex functions")],
+    }
+    result = _azure_responses_transform([additional_tools_item])
+    tools = result["input"][0]["tools"]
+    assert tools[0]["description"] == "Codex functions"
+
+
+@pytest.mark.serial
+def test_azure_responses_namespace_normalization_does_not_mutate_caller_input():
+    """The transform must deep-copy; the caller's input stays untouched."""
+    tool = _azure_responses_namespace_tool("")
+    source_input = [{"type": "additional_tools", "role": "developer", "tools": [tool]}]
+    result = _azure_responses_transform(source_input)
+    assert result["input"][0]["tools"][0]["description"] == "functions"
+    assert tool["description"] == ""
+
+
+@pytest.mark.serial
+def test_azure_responses_non_additional_tools_input_unchanged():
+    """Input without additional_tools items passes through unmodified."""
+    message = {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Reply with OK."}],
+    }
+    result = _azure_responses_transform([message])
+    assert result["input"] == [message]
+
+
 @pytest.mark.serial
 def test_get_complete_url():
     """

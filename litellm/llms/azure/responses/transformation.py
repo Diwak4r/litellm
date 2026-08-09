@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -24,6 +25,11 @@ else:
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     # Parameters not supported by Azure Responses API
     AZURE_UNSUPPORTED_PARAMS = ["context_management"]
+
+    # Input item type Codex's "responses lite" wire mode uses to carry tool
+    # definitions inside `input` (mirrors bedrock_mantle's handling).
+    _ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
+    _NAMESPACE_TOOL_TYPE: Final = "namespace"
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -108,6 +114,56 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return validated_input
 
+    def _normalize_additional_tools_namespace_descriptions(
+        self, input: str | ResponseInputParam
+    ) -> str | ResponseInputParam:
+        """Azure rejects namespace tools whose `description` is empty or
+        whitespace-only with `code=empty_string` ("Expected a string with
+        minimum length 1, but got an empty string"). Codex CLI 0.147.0 ships a
+        default `functions` namespace with `"description": ""`, which makes
+        every Azure Responses call fail before inference. Normalize
+        empty/whitespace-only namespace descriptions inside `additional_tools`
+        input items to the namespace's own name (deterministic non-empty
+        fallback); leave every supplied non-empty description untouched.
+
+        Issue: https://github.com/BerriAI/litellm/issues/36366
+        """
+        if not isinstance(input, list):
+            return input
+
+        normalized_input: Final = []
+        for item in input:
+            if isinstance(item, dict) and item.get("type") == self._ADDITIONAL_TOOLS_INPUT_ITEM_TYPE:
+                normalized_item = deepcopy(item)
+                tools: Final = normalized_item.get("tools")
+                if isinstance(tools, list):
+                    normalized_item["tools"] = self._normalize_namespace_tool_descriptions(tools)
+                normalized_input.append(normalized_item)
+            else:
+                normalized_input.append(item)
+
+        return normalized_input
+
+    def _normalize_namespace_tool_descriptions(self, tools: Sequence[Any]) -> Sequence[Any]:
+        """Recursively normalize namespace tool descriptions within a tools
+        array (namespace tools may nest their own `tools` arrays)."""
+        normalized: Final = []
+        for tool in tools:
+            if isinstance(tool, dict) and tool.get("type") == self._NAMESPACE_TOOL_TYPE:
+                normalized_tool = deepcopy(tool)
+                description: Final = normalized_tool.get("description")
+                if description is None or not str(description).strip():
+                    name: Final = normalized_tool.get("name")
+                    if isinstance(name, str) and name.strip():
+                        normalized_tool["description"] = name
+                nested_tools: Final = normalized_tool.get("tools")
+                if isinstance(nested_tools, list):
+                    normalized_tool["tools"] = self._normalize_namespace_tool_descriptions(nested_tools)
+                normalized.append(normalized_tool)
+            else:
+                normalized.append(tool)
+        return normalized
+
     def transform_responses_api_request(
         self,
         model: str,
@@ -133,6 +189,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 else:
                     new_tools.append(tool)
             response_api_optional_request_params["tools"] = new_tools
+
+        input = self._normalize_additional_tools_namespace_descriptions(input)
 
         return super().transform_responses_api_request(
             model=stripped_model_name,
